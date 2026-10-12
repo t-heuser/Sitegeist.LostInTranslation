@@ -12,7 +12,8 @@ use DeepL\Usage as UsageResult;
 use Neos\Cache\Exception;
 use Neos\Flow\Tests\UnitTestCase;
 use Sitegeist\LostInTranslation\Domain\ApiStatus;
-use Sitegeist\LostInTranslation\Domain\TranslationServiceInterface;
+use Sitegeist\LostInTranslation\Domain\FailureReportingTranslationServiceInterface;
+use Sitegeist\LostInTranslation\Domain\TranslationFailedException;
 use Sitegeist\LostInTranslation\Infrastructure\DeepL\DeepLAuthenticationKey;
 use Sitegeist\LostInTranslation\Infrastructure\DeepL\DeepLAuthenticationKeyFactory;
 use Sitegeist\LostInTranslation\Infrastructure\DeepL\DeeplClientFactory;
@@ -22,7 +23,7 @@ use Sitegeist\LostInTranslation\Infrastructure\DeepL\DeepLTranslationService;
 
 class DeepLTranslationServiceTest extends UnitTestCase
 {
-    protected TranslationServiceInterface $translationService;
+    protected FailureReportingTranslationServiceInterface $translationService;
     protected DeeplClientFactory $mockDeeplClientFactory;
     protected DeepLClient $mockDeeplClient;
     protected DeepLAuthenticationKeyFactory $mockDeeplAuthenticationKeyFactory;
@@ -381,6 +382,41 @@ class DeepLTranslationServiceTest extends UnitTestCase
         );
 
         $this->assertEquals(['de_foo', 'de_bar', 'en_baz', 'en_bam'], $translatedTexts);
+    }
+
+    /**
+     * @test
+     */
+    public function translateOrFailReturnsTheTranslation(): void
+    {
+        $this->mockDeeplClient
+            ->expects(self::once())
+            ->method('translateText')
+            ->with(['en_foo'], 'en', 'de')
+            ->willReturn(new TextResult('de_foo', 'en', 6));
+
+        $translatedTexts = $this->translationService->translateOrFail(['en_foo'], 'de', 'en');
+
+        $this->assertEquals(['de_foo'], $translatedTexts);
+    }
+
+    /**
+     * @test
+     */
+    public function translateOrFailThrowsWhenDeeplThrowsException(): void
+    {
+        $deepLException = new DeepLException('something went sideways');
+        $this->mockDeeplClient
+            ->expects(self::once())
+            ->method('translateText')
+            ->willThrowException($deepLException);
+
+        try {
+            $this->translationService->translateOrFail(['en_foo'], 'de', 'en');
+            $this->fail('TranslationFailedException was not thrown');
+        } catch (TranslationFailedException $exception) {
+            $this->assertSame($deepLException, $exception->getPrevious());
+        }
     }
 
     public static function getApiStatusWorksCorrectlyDataProvider(): \Generator

@@ -30,6 +30,22 @@
                 <source>Retranslate</source>
                 <target state="translated">Neu Übersetzen</target>
             </trans-unit>
+            <trans-unit id="pasteDialog.title" xml:space="preserve" approved="yes">
+                <source>Translate the pasted content?</source>
+                <target state="translated">Eingefügten Inhalt übersetzen?</target>
+            </trans-unit>
+            <trans-unit id="pasteDialog.description" xml:space="preserve" approved="yes">
+                <source>The content was copied from "{source}" to "{target}". Should it be translated automatically?</source>
+                <target state="translated">Der Inhalt wurde von „{source}“ nach „{target}“ kopiert. Soll er automatisch übersetzt werden?</target>
+            </trans-unit>
+            <trans-unit id="pasteDialog.keep" xml:space="preserve" approved="yes">
+                <source>Keep original</source>
+                <target state="translated">Original behalten</target>
+            </trans-unit>
+            <trans-unit id="pasteDialog.translate" xml:space="preserve" approved="yes">
+                <source>Translate</source>
+                <target state="translated">Übersetzen</target>
+            </trans-unit>
         </body>
     </file>
 </xliff>

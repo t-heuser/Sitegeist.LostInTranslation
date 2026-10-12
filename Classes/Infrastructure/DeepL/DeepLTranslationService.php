@@ -4,22 +4,21 @@ declare(strict_types=1);
 
 namespace Sitegeist\LostInTranslation\Infrastructure\DeepL;
 
-use DeepL\GlossaryEntries;
-use DeepL\TranslateTextOptions;
-use Neos\Flow\Annotations as Flow;
 use DeepL\DeepLException;
 use DeepL\TextResult;
+use DeepL\TranslateTextOptions;
+use Neos\Flow\Annotations as Flow;
 use Psr\Log\LoggerInterface;
 use Sitegeist\LostInTranslation\Domain\ApiStatus;
-use Sitegeist\LostInTranslation\Domain\Model\Glossary;
+use Sitegeist\LostInTranslation\Domain\FailureReportingTranslationServiceInterface;
 use Sitegeist\LostInTranslation\Domain\Model\GlossaryLanguageKeys;
-use Sitegeist\LostInTranslation\Domain\TranslationServiceInterface;
+use Sitegeist\LostInTranslation\Domain\TranslationFailedException;
 use Sitegeist\LostInTranslation\Utility\IgnoredTermsUtility;
 
 /**
  * @Flow\Scope("singleton")
  */
-class DeepLTranslationService implements TranslationServiceInterface
+class DeepLTranslationService implements FailureReportingTranslationServiceInterface
 {
     /**
      * @var array{defaultOptions?: array<string,mixed>, ignoredTerms?:array<string,string>}
@@ -68,6 +67,35 @@ class DeepLTranslationService implements TranslationServiceInterface
      */
     public function translate(array $texts, string $targetLanguage, ?string $sourceLanguage = null): array
     {
+        return $this->translateTexts($texts, $targetLanguage, $sourceLanguage, false);
+    }
+
+    /**
+     * @param array<string,string> $texts
+     * @param string $targetLanguage
+     * @param string|null $sourceLanguage
+     * @return array<string,string>
+     * @throws TranslationFailedException
+     */
+    public function translateOrFail(array $texts, string $targetLanguage, ?string $sourceLanguage = null): array
+    {
+        return $this->translateTexts($texts, $targetLanguage, $sourceLanguage, true);
+    }
+
+    /**
+     * @param array<string,string> $texts
+     * @param string $targetLanguage
+     * @param string|null $sourceLanguage
+     * @param bool $failOnError
+     * @return array<string,string>
+     * @throws TranslationFailedException
+     */
+    protected function translateTexts(
+        array $texts,
+        string $targetLanguage,
+        ?string $sourceLanguage,
+        bool $failOnError,
+    ): array {
         // deepl api does throw critical errors when 'en' or 'pt' is used
         // this prevents that by defaulting to the most likely option
         if (strtolower($targetLanguage) === 'en') {
@@ -157,6 +185,9 @@ class DeepLTranslationService implements TranslationServiceInterface
             return $mergedTranslatedStrings;
         } catch (DeepLException $e) {
             $this->logger?->critical('DeeplException caught: ' . $e->getMessage());
+            if ($failOnError) {
+                throw new TranslationFailedException($e->getMessage(), 1760263200, $e);
+            }
             return array_replace($texts, $cachedEntries);
         }
     }

@@ -20,6 +20,7 @@ use Neos\Flow\Persistence\Exception\IllegalObjectTypeException;
 use Neos\Flow\Utility\Algorithms;
 use PHPUnit\Framework\MockObject\MockObject;
 use Sitegeist\LostInTranslation\ContentRepository\NodeTranslationService;
+use Sitegeist\LostInTranslation\Domain\TranslationFailedException;
 use Sitegeist\LostInTranslation\Infrastructure\DeepL\DeepLTranslationService;
 use Sitegeist\LostInTranslation\Tests\Functional\AbstractFunctionalTestCase;
 
@@ -479,6 +480,62 @@ class NodeTranslationServiceTest extends AbstractFunctionalTestCase
 
         $this->assertTrue(is_null($nodeInGerman), 'The node in German was removed');
         $this->assertTrue(is_null($nodeInEnglish), 'The node in English was removed');
+    }
+
+    /**
+     * @test
+     * @return void
+     * @throws Exception
+     */
+    public function nodeCopiedFromGermanIntoItalianIsTranslatedIncludingChildNodes(): void
+    {
+        $this->deeplServiceMock->method('translateOrFail')->willReturnCallback(
+            function (array $texts, string $targetLanguage, ?string $sourceLanguage) {
+                $this->assertEquals('it', $targetLanguage);
+                $this->assertEquals('de', $sourceLanguage);
+                return array_map(fn (string $text) => 'it: ' . $text, $texts);
+            }
+        );
+
+        $nodeInGerman = $this->createTestNodeWithChildNode('Hallo Welt!', 'Hallo Kind!');
+        $copiedNodeInItalian = $nodeInGerman->copyInto($this->italianUserContext->getRootNode(), 'copied-node');
+
+        $failedNodes = $this->objectManager->get(NodeTranslationService::class)->translateCopiedNode($nodeInGerman, $copiedNodeInItalian);
+
+        $this->assertSame([], $failedNodes);
+        $this->assertEquals('it: Hallo Welt!', $copiedNodeInItalian->getProperty('inlineEditableStringProperty'), 'The inline editable property was translated into Italian');
+        $this->assertEquals('Hallo Welt!', $copiedNodeInItalian->getProperty('stringProperty'), 'The non-inline editable property was not translated');
+        $this->assertEquals('it: Hallo Kind!', $copiedNodeInItalian->getNode('child-node')->getProperty('inlineEditableStringProperty'), 'The child node was translated into Italian');
+    }
+
+    /**
+     * @test
+     * @return void
+     * @throws Exception
+     */
+    public function nodeCopiedFromGermanKeepsTheGermanTextAndIsReportedWhenTheTranslationFails(): void
+    {
+        $this->deeplServiceMock->method('translateOrFail')->willThrowException(new TranslationFailedException('something went sideways'));
+
+        $nodeInGerman = $this->createTestNodeWithChildNode('Hallo Welt!', 'Hallo Kind!');
+        $copiedNodeInItalian = $nodeInGerman->copyInto($this->italianUserContext->getRootNode(), 'copied-node');
+
+        $failedNodes = $this->objectManager->get(NodeTranslationService::class)->translateCopiedNode($nodeInGerman, $copiedNodeInItalian);
+
+        $this->assertCount(2, $failedNodes, 'Both the copied node and its child node are reported');
+        $this->assertEquals('Hallo Welt!', $copiedNodeInItalian->getProperty('inlineEditableStringProperty'));
+        $this->assertEquals('Hallo Kind!', $copiedNodeInItalian->getNode('child-node')->getProperty('inlineEditableStringProperty'));
+    }
+
+    /**
+     * @throws Exception
+     */
+    protected function createTestNodeWithChildNode(string $text, string $childText): NodeInterface
+    {
+        $node = $this->createTestNode(['inlineEditableStringProperty' => $text, 'stringProperty' => $text]);
+        $childNode = $node->createNode('child-node', $this->getNodeType('Sitegeist.LostInTranslation.Testing:NodeWithAutomaticTranslation'), Algorithms::generateUUID());
+        $childNode->setProperty('inlineEditableStringProperty', $childText);
+        return $node;
     }
 
     /**

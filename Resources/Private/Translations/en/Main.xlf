@@ -23,6 +23,18 @@
             <trans-unit id="button.translate">
                 <source>Retranslate</source>
             </trans-unit>
+            <trans-unit id="pasteDialog.title">
+                <source>Translate the pasted content?</source>
+            </trans-unit>
+            <trans-unit id="pasteDialog.description">
+                <source>The content was copied from "{source}" to "{target}". Should it be translated automatically?</source>
+            </trans-unit>
+            <trans-unit id="pasteDialog.keep">
+                <source>Keep original</source>
+            </trans-unit>
+            <trans-unit id="pasteDialog.translate">
+                <source>Translate</source>
+            </trans-unit>
         </body>
     </file>
 </xliff>

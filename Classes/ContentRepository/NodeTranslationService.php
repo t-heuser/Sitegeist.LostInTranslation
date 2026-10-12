@@ -13,7 +13,9 @@ use Neos\Flow\Persistence\Doctrine\PersistenceManager;
 use Neos\Flow\Persistence\Exception\IllegalObjectTypeException;
 use Neos\Neos\Service\PublishingService;
 use Neos\Neos\Utility\NodeUriPathSegmentGenerator;
+use Sitegeist\LostInTranslation\Domain\FailureReportingTranslationServiceInterface;
 use Sitegeist\LostInTranslation\Domain\TranslatableProperty\TranslatablePropertyNamesFactory;
+use Sitegeist\LostInTranslation\Domain\TranslationFailedException;
 use Sitegeist\LostInTranslation\Domain\TranslationServiceInterface;
 use Sitegeist\LostInTranslation\Utility\ArrayFlatteningUtility;
 
@@ -143,16 +145,7 @@ class NodeTranslationService
             return;
         }
 
-        if (!empty($this->excludedNodePaths)) {
-            foreach ($this->excludedNodePaths as $excludedNodePath) {
-                if (str_starts_with($node->getPath(), $excludedNodePath)) {
-                    return;
-                }
-            }
-        }
-
-        $isAutomaticTranslationEnabledForNodeType = $node->getNodeType()->getConfiguration('options.automaticTranslation') ?? true;
-        if (!$isAutomaticTranslationEnabledForNodeType) {
+        if (!$this->isAutomaticTranslationEnabledForNode($node)) {
             return;
         }
 
@@ -189,16 +182,7 @@ class NodeTranslationService
             return;
         }
 
-        if (!empty($this->excludedNodePaths)) {
-            foreach ($this->excludedNodePaths as $excludedNodePath) {
-                if (str_starts_with($node->getPath(), $excludedNodePath)) {
-                    return;
-                }
-            }
-        }
-
-        $isAutomaticTranslationEnabledForNodeType = $node->getNodeType()->getConfiguration('options.automaticTranslation') ?? true;
-        if (!$isAutomaticTranslationEnabledForNodeType) {
+        if (!$this->isAutomaticTranslationEnabledForNode($node)) {
             return;
         }
 
@@ -254,11 +238,88 @@ class NodeTranslationService
      */
     public function translateNode(NodeInterface $sourceNode, NodeInterface $targetNode, Context $context): void
     {
-        $translatableProperties = $this->translatablePropertiesFactory->createForNodeType($sourceNode->getNodeType());
+        $this->translateNodeProperties($sourceNode, $targetNode, $context, false);
+    }
 
-        $sourceDimensionValue = $sourceNode->getContext()->getTargetDimensions()[$this->languageDimensionName];
-        $targetDimensionValue = $context->getTargetDimensions()[$this->languageDimensionName];
+    /**
+     * Whether translateCopiedNode() would translate a node copied from $sourceNode into the dimension of $copiedNode.
+     */
+    public function canTranslateCopiedNode(NodeInterface $sourceNode, NodeInterface $copiedNode): bool
+    {
+        if (!$this->enabled) {
+            return false;
+        }
 
+        $sourceDimensionValue = $sourceNode->getContext()->getTargetDimensions()[$this->languageDimensionName] ?? null;
+        $targetDimensionValue = $copiedNode->getContext()->getTargetDimensions()[$this->languageDimensionName] ?? null;
+        if ($sourceDimensionValue === null || $targetDimensionValue === null || $sourceDimensionValue === $targetDimensionValue) {
+            return false;
+        }
+
+        $targetLanguagePreset = $this->contentDimensionConfiguration[$this->languageDimensionName]['presets'][$targetDimensionValue];
+        $translationStrategy = $targetLanguagePreset['options']['translationStrategy'] ?? self::TRANSLATION_STRATEGY_ONCE;
+        if ($translationStrategy === self::TRANSLATION_STRATEGY_NONE) {
+            return false;
+        }
+
+        [$sourceLanguage, $targetLanguage] = $this->resolveDeepLLanguages($sourceDimensionValue, $targetDimensionValue);
+        return $sourceLanguage !== '' && $targetLanguage !== '' && $sourceLanguage !== $targetLanguage;
+    }
+
+    /**
+     * Translates a node copied from another language dimension, including all its descendants.
+     *
+     * A copy keeps the node names of its originals but not always their identifiers, so descendants are paired by
+     * name. A node whose translation fails keeps the source texts and is returned, so the caller can report it.
+     *
+     * @param NodeInterface $sourceNode
+     * @param NodeInterface $copiedNode
+     * @return NodeInterface[] the copied nodes whose translation failed
+     */
+    public function translateCopiedNode(NodeInterface $sourceNode, NodeInterface $copiedNode): array
+    {
+        if (!$this->canTranslateCopiedNode($sourceNode, $copiedNode)) {
+            return [];
+        }
+
+        return $this->translateCopiedNodeRecursively($sourceNode, $copiedNode);
+    }
+
+    /**
+     * @param NodeInterface $sourceNode
+     * @param NodeInterface $copiedNode
+     * @return NodeInterface[]
+     */
+    protected function translateCopiedNodeRecursively(NodeInterface $sourceNode, NodeInterface $copiedNode): array
+    {
+        $failedNodes = [];
+
+        if ($this->isAutomaticTranslationEnabledForNode($copiedNode)) {
+            try {
+                $this->translateNodeProperties($sourceNode, $copiedNode, $copiedNode->getContext(), true);
+            } catch (TranslationFailedException) {
+                $failedNodes[] = $copiedNode;
+            }
+        }
+
+        foreach ($sourceNode->getChildNodes() as $sourceChildNode) {
+            $copiedChildNode = $copiedNode->getNode($sourceChildNode->getName());
+            if ($copiedChildNode instanceof NodeInterface) {
+                array_push($failedNodes, ...$this->translateCopiedNodeRecursively($sourceChildNode, $copiedChildNode));
+            }
+        }
+
+        return $failedNodes;
+    }
+
+    /**
+     * A preset's `deeplLanguage` option overrides the language derived from the dimension value; a value of the form
+     * "source:target" names different DeepL languages for the two directions.
+     *
+     * @return array{0: string, 1: string} the DeepL source and target language
+     */
+    protected function resolveDeepLLanguages(string $sourceDimensionValue, string $targetDimensionValue): array
+    {
         $sourceLanguage = explode('_', $sourceDimensionValue)[0];
         $targetLanguage = explode('_', $targetDimensionValue)[0];
 
@@ -280,6 +341,41 @@ class NodeTranslationService
                 $targetLanguage = $targetLanguageParts[1];
             }
         }
+
+        return [$sourceLanguage, $targetLanguage];
+    }
+
+    protected function isAutomaticTranslationEnabledForNode(NodeInterface $node): bool
+    {
+        foreach ($this->excludedNodePaths as $excludedNodePath) {
+            if (str_starts_with($node->getPath(), $excludedNodePath)) {
+                return false;
+            }
+        }
+
+        return (bool) ($node->getNodeType()->getConfiguration('options.automaticTranslation') ?? true);
+    }
+
+    /**
+     * @param NodeInterface $sourceNode
+     * @param NodeInterface $targetNode
+     * @param Context $context
+     * @param bool $failOnError
+     * @return void
+     * @throws TranslationFailedException only if $failOnError is set
+     */
+    protected function translateNodeProperties(
+        NodeInterface $sourceNode,
+        NodeInterface $targetNode,
+        Context $context,
+        bool $failOnError,
+    ): void {
+        $translatableProperties = $this->translatablePropertiesFactory->createForNodeType($sourceNode->getNodeType());
+
+        $sourceDimensionValue = $sourceNode->getContext()->getTargetDimensions()[$this->languageDimensionName];
+        $targetDimensionValue = $context->getTargetDimensions()[$this->languageDimensionName];
+
+        [$sourceLanguage, $targetLanguage] = $this->resolveDeepLLanguages($sourceDimensionValue, $targetDimensionValue);
         if (empty($sourceLanguage) || empty($targetLanguage) || ($sourceLanguage == $targetLanguage)) {
             return;
         }
@@ -313,7 +409,18 @@ class NodeTranslationService
         if (count($propertiesToTranslate) > 0) {
             $propertiesToTranslateDeflated = ArrayFlatteningUtility::deflate($propertiesToTranslate);
             /** @var array<non-empty-string, string> $translatedPropertiesDeflated */
-            $translatedPropertiesDeflated = $this->translationService->translate($propertiesToTranslateDeflated, $targetLanguage, $sourceLanguage);
+            $translatedPropertiesDeflated = $failOnError
+            && $this->translationService instanceof FailureReportingTranslationServiceInterface
+                ? $this->translationService->translateOrFail(
+                    $propertiesToTranslateDeflated,
+                    $targetLanguage,
+                    $sourceLanguage,
+                )
+                : $this->translationService->translate(
+                    $propertiesToTranslateDeflated,
+                    $targetLanguage,
+                    $sourceLanguage,
+                );
             $translatedProperties = ArrayFlatteningUtility::enflate($translatedPropertiesDeflated);
             $properties = array_merge($translatedProperties, $properties);
         } else {

@@ -11,6 +11,7 @@ Neos:
         types:
           'Sitegeist.LostInTranslation:AddMissingTranslations': Sitegeist\LostInTranslation\Ui\Changes\AddMissingTranslations
           'Sitegeist.LostInTranslation:UpdateOutdatedTranslations': Sitegeist\LostInTranslation\Ui\Changes\UpdateOutdatedTranslations
+          'Sitegeist.LostInTranslation:TranslateCopiedNode': Sitegeist\LostInTranslation\Ui\Changes\TranslateCopiedNode
 
       resources:
         javascript:
